@@ -23,7 +23,7 @@ class SlackMessage(BaseModel):
     key: str
 
 
-async def send_to_slack(message: str, method: str, path: str, headers: Dict[str, Any]):
+async def send_to_slack(message: str, method: str, path: str, headers: Dict[str, Any], channel_id: Optional[str] = None):
     """Send a message to Slack using webhook or bot token"""
 
     # format message as json if it is json
@@ -40,7 +40,7 @@ async def send_to_slack(message: str, method: str, path: str, headers: Dict[str,
     try:
         async with httpx.AsyncClient() as client:
             payload = {
-                "channel": config.slack.channel_id,
+                "channel": channel_id or config.slack.channel_id,
                 "text": formatted_message,
                 "parse": "mrkdwn"
             }
@@ -54,15 +54,17 @@ async def send_to_slack(message: str, method: str, path: str, headers: Dict[str,
             )
             result = response.json()
             if not result.get("ok"):
-                print(f"Slack API error: {result.get('error')}")
-                return False
+                error = result.get('error')
+                logger.warning(f"Slack API error: {error}")
+                return False, error
             else:
-                print("Message sent to Slack successfully")
-                return True
+                logger.info("Message sent to Slack successfully")
+                return True, None
 
     except Exception as e:
-        print(f"Error sending to Slack: {str(e)}")
-        return False
+        error_msg = str(e)
+        logger.warning(f"Error sending to Slack: {error_msg}")
+        return False, error_msg
 
 
 @app.middleware("http")
@@ -73,6 +75,9 @@ async def catch_all_middleware(request: Request, call_next):
     method = request.method
     path = str(request.url.path)
     headers = dict(request.headers)
+
+    # Check for slack_id query parameter
+    slack_channel_id = request.query_params.get("channel_id")
 
     # Try to get request body for logging
     try:
@@ -90,32 +95,51 @@ async def catch_all_middleware(request: Request, call_next):
         body_text = "[could not read body]"
 
     try:
-        res = await send_to_slack(body_text, method, path, headers)
+        res, error = await send_to_slack(body_text, method, path, headers, slack_channel_id)
     except Exception as e:
         res = False
-        print(f"Failed to send to Slack: {e}")
+        error = str(e)
+        logger.warning(f"Failed to send to Slack: {e}")
+
+    # Prepare response content with channel info
+    response_content = {
+        "status": "ok" if res else "warning",
+        "method": method,
+        "path": path
+    }
+
+    if slack_channel_id:
+        response_content["slack_channel_override"] = slack_channel_id
 
     if res:
-        return JSONResponse(
-            status_code=200,
-            content={
-                "status": "ok",
-                "message": "Request processed successfully",
-                "method": method,
-                "path": path
-            }
-        )
+        response_content["message"] = "Request processed successfully and sent to Slack"
+        if slack_channel_id:
+            response_content["message"] += f" (custom channel: {slack_channel_id})"
     else:
-        # If sending to Slack failed, return 500 with error message
-        return JSONResponse(
-            status_code=500,
-            content={
-                "status": "error",
-                "message": "Request processed, but failed to send to Slack",
-                "method": method,
-                "path": path
-            }
-        )
+        # Handle specific Slack API errors
+        if error == "channel_not_found":
+            channel = slack_channel_id or config.slack.channel_id
+            response_content["message"] = f"Request processed, but Slack channel not found: {channel}"
+        elif error == "not_in_channel":
+            channel = slack_channel_id or config.slack.channel_id
+            response_content["message"] = f"Request processed, but bot is not in Slack channel: {channel}"
+        elif error == "channel_is_archived":
+            channel = slack_channel_id or config.slack.channel_id
+            response_content["message"] = f"Request processed, but Slack channel is archived: {channel}"
+        elif error and "channel" in error.lower():
+            channel = slack_channel_id or config.slack.channel_id
+            response_content["message"] = f"Request processed, but Slack channel error ({error}): {channel}"
+        else:
+            response_content["message"] = "Request processed, but failed to send to Slack"
+            if slack_channel_id:
+                response_content["message"] += f" (attempted custom channel: {slack_channel_id})"
+            if error:
+                response_content["slack_error"] = error
+
+    return JSONResponse(
+        status_code=200,
+        content=response_content
+    )
 
 
 @app.get("/")
