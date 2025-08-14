@@ -95,7 +95,7 @@ async def catch_all_middleware(request: Request, call_next):
         res = False
         print(f"Failed to send to Slack: {e}")
 
-    if not res:
+    if res:
         return JSONResponse(
             status_code=200,
             content={
@@ -106,7 +106,7 @@ async def catch_all_middleware(request: Request, call_next):
             }
         )
     else:
-        # If sending to Slack failed, still return 500
+        # If sending to Slack failed, return 500 with error message
         return JSONResponse(
             status_code=500,
             content={
