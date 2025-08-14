@@ -1,0 +1,19 @@
+[project]
+name = "watson"
+version = "0.1.0"
+description = "Logs all requests to Slack. Useful for testing server"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi[standard]>=0.116.1",
+    "httpx>=0.28.1",
+    "pydantic-settings>=2.10.1",
+    "uvloop>=0.21.0",
+]
+
+[project.scripts]
+watson = "watson.__main__:start"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
